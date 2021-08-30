@@ -1,0 +1,156 @@
+
+##################################################################
+### this is how we asssess estimated true effect for 1 year macce
+##################################################################
+
+### assign parameter
+#############################
+o = 9.5 ## percentage of outcome
+t = 45.1  ## percentage of treatment
+
+rou_YT_input = 0.625 ## correlation coefficients between treatment and unmeasured confounder
+rou_YU_input = 0.054 ## correlation coefficients between outcome and unmeasured confounder
+rou_YT_input = -0.067 ## correlation coefficients between outcome and treatment
+
+n_observation=1000
+n_dataset=100
+
+nrep=22 # number of columns of the final output
+nj=11 # number of columns of the intermitent output
+
+range1=0.3 ## range surround correlation coefficients for simulation
+increment1=0.05 ##  eaqually spaced values within the range 
+
+
+
+##################################################################
+### Simulation
+##################################################################
+# sequence of correlation with small range and increment
+rtu=seq(rou_TU_input-range1,rou_TU_input+range1,increment1)
+ryu=seq(rou_YU_input-range1,rou_YU_input+range1,increment1)
+ryt=seq(rou_YT_input-range1,rou_YT_input+range1,increment1)
+
+# simulate gradient numbers for correlation
+e=rep(NA,3)
+for (i1 in c(1:length(ryt))){
+  for (i2 in c(1:length(ryu))){
+    for (i3 in c(1:length(rtu))){
+      
+      r=c(ryt[i1],ryu[i2],rtu[i3])
+      e=rbind(e,r)
+    }
+  }
+  # print(i1)
+  # flush.console()
+}
+r=e[-1,]
+
+###############################
+## positive definite filter
+l=rep(NA,9)
+i=1
+repeat {
+  if (i==dim(r)[1]+1) break;
+  v=c(1,r[i,1],r[i,2],
+      r[i,1],1,r[i,3],
+      r[i,2],r[i,3],1
+  )
+  a=array(v,dim=c(3,3))
+  if (is.positive.definite(a)=='TRUE') l=rbind(l,v);
+  
+  print(i)
+  flush.console()
+  i=i+1
+}
+l=l[-1,]
+
+##########################
+##########################
+b=rep(NA,nrep)
+j=1
+
+repeat{
+  print(j)
+  flush.console()
+  
+  q=as.data.frame(array(l[j,],dim=c(3,3))) # correlation/covariance matrix
+  
+  bj=rep(NA,nj) # numbers of column 
+  k=1
+  repeat{
+    if (k==n_dataset+1) break;# number of datasets
+    k=k+1
+    
+    X<-MASS::mvrnorm(n=n_observation, mu = rep(0, 3), Sigma = q)
+    X=as.data.frame(X)
+    names(X)=c('Y','T','U')
+    
+    X$E=ifelse(X$T>quantile(X$T,prob=1-t/100),1,0)
+    rou_ut=cor(X$E,X$U) # generate new correlation
+    bs_tu=polyserial(X$E,X$U)
+    
+    X$Yq=ifelse(X$Y>quantile(X$Y,prob=1-o/100),1,0)
+    rou_yu=cor(X$Yq,X$U)
+    rou_yt=cor(X$Yq,X$E)
+    bs_yu=polyserial(X$Yq,X$U)
+    tc_yt=polychor(X$Yq,X$E)
+    
+    Mtrue=glm(Yq~ E+U,data=X, family = "binomial")
+    b_true=summary(Mtrue)$coefficients[2,1]
+     
+    Mols=glm(Yq~ E,data=X, family = "binomial")
+    b_OLS=summary(Mols)$coefficients[2,1]
+    bias_ols=b_OLS-b_true # mean of bias, then square is (mean) bias_squared
+    biasq_ols=(b_OLS-b_true)^2 # mean of this is MSE
+    rbias=bias_ols/b_true
+    
+    ###
+    bb=c(rbias,b_true,b_OLS,bias_ols,biasq_ols,rou_yu,rou_yt,rou_ut,bs_yu,bs_tu,tc_yt)
+    bj=rbind(bj,bb)
+  }
+  
+  bj=bj[-1,]
+  bmedian=apply(bj,2,median)
+  bmean=apply(bj,2,mean)
+  bm=c(bmedian,bmean)
+  b=rbind(b,bm) 
+  
+  j=j+1
+  if (j==dim(l)[1]+1) break;
+}
+
+output=as.data.frame(b[-1,])
+names(output)=c('rbias_md','b_true_md','b_est_md','bias_md','mse_md','rou_yu_md','rou_yt_md','rou_ut_md','bs_yu_md','bs_tu_md','tc_yt_md',
+           'rbias_mn','b_true_mn','b_est_mn','bias_mn','mse_mn','rou_yu_mn','rou_yt_mn','rou_ut_mn','bs_yu_mn','bs_tu_mn','tc_yt_mn') 
+## b_est_mn is mean of estimated effect, b_true_mn is mean of estimated true effect
+## rou_yu_mn is mean of correlation coefficient between outcome and unmeasured confounder
+## rou_yt_mn is mean of correlation coefficient between outcome and treatment
+## rou_ut_mn is mean of correlation coefficient between unmeasured confounder and treatment
+
+
+
+###########################################################################################
+### tabulation
+############################################################################################
+
+### parameter input
+#############################
+or=0.713 # Matching Weight adjusted Odds Ratio for 1 year MACCE
+r_tu=0.586 # biserial correlation between treatment and unmeasured confounding
+r_yu=0.048 # biserial correlation between outcome and unmeasured confounding
+
+x=output
+lb=(log(or))-0.05 # adjustable range
+hb=(log(or))+0.05
+y=x[x$b_est_mn>lb & x$b_est_mn<hb, ]
+
+t=interp(y$rou_ut_mn,y$rou_yu_mn,y$b_true_mn,duplicate="strip")
+
+zor=as.data.frame(t$z)# x-axis: UT y-axis: YU
+names(zor)=round(t$x,3)
+row.names(zor)=round(t$y,3)
+zor1=round(zor,3)
+zor2=zor1[nrow(zor1):1,] 
+or_true=exp(mean(as.matrix(zor2[rownames(zor2) %in% seq(r_yu-0.01,r_yu+0.01,0.001),colnames(zor2) %in% seq(r_tu-0.01,r_tu+0.01,0.001)])))
+or_true
